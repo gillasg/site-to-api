@@ -1,0 +1,65 @@
+{
+  "name": "site-to-api",
+  "version": "0.1.0",
+  "description": "Parse any site into a typed API: record it in your own browser, get an OpenAPI spec, a typed client, REST and MCP.",
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "site-to-api": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "openapi",
+    "api",
+    "har",
+    "reverse-engineering",
+    "scraping",
+    "mcp",
+    "browser",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/**/*.mjs\" \"*.{json,yaml,mjs}\" \".github/**/*.yml\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/**/*.mjs\" \"*.{json,yaml,mjs}\" \".github/**/*.yml\"",
+    "test": "node --test --test-timeout=120000 test/*.test.mjs",
+    "check": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm build && pnpm test",
+    "pack:vendor": "node scripts/pack-vendor.mjs"
+  },
+  "dependencies": {
+    "pi-ai-login": "file:vendor/pi-ai-login-0.1.1.tgz"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.3",
+    "@types/ws": "8.18.1",
+    "eslint": "10.11.0",
+    "prettier": "3.9.9",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.1",
+    "ws": "8.22.0"
+  }
+}
