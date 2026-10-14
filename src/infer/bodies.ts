@@ -17,6 +17,11 @@ export function parseRequestBody(exchange: Exchange): ParsedBody | undefined {
   const raw = exchange.requestBody;
   if (raw === undefined || raw === "") return undefined;
   const mime = requestMime(exchange);
+  // Some sites send JSON labelled as a form (it skips the CORS preflight): it is JSON, sent with
+  // the same label.
+  const labelledJson =
+    mime.includes("x-www-form-urlencoded") && /^\s*[[{]/.test(raw) ? parseJson(raw) : undefined;
+  if (labelledJson !== undefined) return { mime, value: labelledJson };
   if (mime.includes("x-www-form-urlencoded")) {
     const value: Record<string, unknown> = {};
     for (const [key, item] of new URLSearchParams(raw)) value[key] = parseJson(item) ?? item;
@@ -54,6 +59,17 @@ function operationFromQuery(query: string | undefined): {
 const fromJsonText = (value: unknown): unknown =>
   typeof value === "string" ? parseJson(value) : value;
 
+/** Search APIs also send {"query": "words"}: only GraphQL text, or GraphQL's other fields, count. */
+function graphqlText(source: Record<string, unknown>): string | undefined {
+  const text = typeof source.query === "string" ? source.query : undefined;
+  if (!text) return undefined;
+  const looksGraphql =
+    /^\s*(query|mutation|subscription|fragment)\b|^\s*\{/.test(text) ||
+    typeof source.operationName === "string" ||
+    source.variables !== undefined;
+  return looksGraphql ? text : undefined;
+}
+
 function graphqlFrom(
   source: Record<string, unknown>,
   variablesPath: string,
@@ -61,7 +77,7 @@ function graphqlFrom(
   const extensions = fromJsonText(source.extensions) as
     { persistedQuery?: { sha256Hash?: string } } | undefined;
   const hash = extensions?.persistedQuery?.sha256Hash;
-  const query = typeof source.query === "string" ? source.query : undefined;
+  const query = graphqlText(source);
   if (!query && !hash) return undefined;
   const parsed = operationFromQuery(query);
   const call: GraphqlCall = { type: parsed.type, variablesPath };

@@ -210,7 +210,11 @@ test("path templates: ids by shape, slugs by variation, names from neighbours", 
     { url: "https://x.test/shop/green-bag-2" },
     { url: "https://x.test/api/v2/categories" },
     { url: "https://x.test/files/a1b2c3d4e5f60718" },
+    { url: "https://search.test/1/indexes/items/query" },
+    { url: "https://x.test/api/3/products/77" },
   ]);
+  assert.equal(paths[6].template, "/1/indexes/items/query", "an API version stays in the path");
+  assert.equal(paths[7].template, "/api/3/products/{productId}");
   assert.equal(paths[0].template, "/users/{userId}/orders/{orderId}");
   assert.equal(paths[1].template, "/shop/{shopSlug}");
   assert.equal(paths[4].template, "/api/v2/categories");

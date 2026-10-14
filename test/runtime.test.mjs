@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 import {
   buildSiteModel,
   parseCapture,
@@ -118,6 +119,50 @@ test("auto transport: public calls go direct, signed calls go through the page",
   const api = await siteApi(model.site, { model, bridge: async () => browser, session: false });
   assert.equal((await api.getSigned({ q: "x" })).secret, "signed-ok");
   assert.ok(browser.calls.some((c) => c.url.includes("/api/signed")));
+});
+
+test("JSON sent with a form label is replayed as the same JSON, under the same label", async (t) => {
+  const received = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    received.push({ type: request.headers["content-type"], body });
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ hits: [{ title: JSON.parse(body).query }] }));
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/1/indexes/items/query?key=abc`;
+  const entry = (query) => ({
+    startedDateTime: new Date().toISOString(),
+    request: {
+      method: "POST",
+      url,
+      headers: [{ name: "content-type", value: "application/x-www-form-urlencoded" }],
+      queryString: [{ name: "key", value: "abc" }],
+      postData: {
+        mimeType: "application/x-www-form-urlencoded",
+        text: JSON.stringify({ query, page: 0 }),
+      },
+    },
+    response: {
+      status: 200,
+      headers: [{ name: "content-type", value: "application/json" }],
+      content: { mimeType: "application/json", text: JSON.stringify({ hits: [{ title: query }] }) },
+    },
+    _resourceType: "fetch",
+  });
+  const har = { log: { version: "1.2", entries: [entry("rust"), entry("go")] } };
+  const { model } = await buildSiteModel(parseCapture(JSON.stringify(har), "search"), {
+    site: "127.0.0.1",
+  });
+  const operation = model.operations.find((o) => o.path === "/1/indexes/items/query");
+  assert.ok(operation, model.operations.map((o) => o.path).join(", "));
+  const api = await siteApi(model.site, { model, transport: "direct", session: false });
+  const result = await api.call(operation.id, { query: "python" });
+  assert.equal(result.hits[0].title, "python");
+  assert.match(received.at(-1).type, /x-www-form-urlencoded/);
+  assert.deepEqual(JSON.parse(received.at(-1).body), { query: "python", page: 0 });
 });
 
 test("useBrowser routes every browser call through another app's connection", async (t) => {

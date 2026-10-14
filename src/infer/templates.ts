@@ -116,7 +116,10 @@ export function templatePaths(inputs: TemplateInput[], overrides: string[] = [])
   const split = inputs.map((input) => {
     const url = new URL(input.url);
     const segments = url.pathname.split("/").slice(1).map(safeDecode);
-    return { url, segments, kinds: segments.map(shapeKind), shape: input.shape ?? "" };
+    const kinds = segments.map((segment, index) =>
+      isVersion(segments, index) ? undefined : shapeKind(segment),
+    );
+    return { url, segments, kinds, shape: input.shape ?? "" };
   });
   const slugPositions = findSlugPositions(split);
   return split.map(({ url, segments, kinds }) => {
@@ -141,6 +144,13 @@ export function templatePaths(inputs: TemplateInput[], overrides: string[] = [])
     });
     return { template: "/" + parts.join("/"), params };
   });
+}
+
+/** An API version (/1/indexes/…, /api/2/…) is part of the path, not an id. */
+function isVersion(segments: string[], index: number): boolean {
+  const segment = segments[index] ?? "";
+  if (!/^\d{1,2}(\.\d+)?$/.test(segment) || index >= segments.length - 1) return false;
+  return index === 0 || /^(api|rest|services?)$/i.test(segments[index - 1] ?? "");
 }
 
 function safeDecode(segment: string): string {
