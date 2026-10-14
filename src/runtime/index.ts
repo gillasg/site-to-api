@@ -1,7 +1,9 @@
 // The runtime, importable on its own: `import { siteApi } from "site-to-api/runtime"`.
 export { siteApi, SiteClient, HttpError, type SiteApi, type SiteApiOptions } from "./site-api.js";
 export {
-  Bridge,
+  type Bridge,
+  BridgeClient,
+  useBrowser,
   BrowserNotConnected,
   sharedBridge,
   closeSharedBridge,

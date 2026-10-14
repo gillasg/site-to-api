@@ -1,6 +1,6 @@
 {
   "name": "site-to-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Parse any site into a typed API: record it in your own browser, get an OpenAPI spec, a typed client, REST and MCP.",
   "type": "module",
   "license": "MIT",

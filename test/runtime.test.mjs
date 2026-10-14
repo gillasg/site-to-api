@@ -7,6 +7,7 @@ import {
   PageTransport,
   DirectTransport,
   MissingParams,
+  useBrowser,
 } from "../dist/index.js";
 import { startFixtureSite } from "./fixture-site.mjs";
 import { browseShop, NodeRecorder } from "./helpers.mjs";
@@ -116,6 +117,16 @@ test("auto transport: public calls go direct, signed calls go through the page",
   const browser = new FakeBrowser();
   const api = await siteApi(model.site, { model, bridge: async () => browser, session: false });
   assert.equal((await api.getSigned({ q: "x" })).secret, "signed-ok");
+  assert.ok(browser.calls.some((c) => c.url.includes("/api/signed")));
+});
+
+test("useBrowser routes every browser call through another app's connection", async (t) => {
+  const { model } = await shop(t);
+  const browser = new FakeBrowser();
+  useBrowser(browser);
+  t.after(() => useBrowser(undefined));
+  const api = await siteApi(model.site, { model, session: false });
+  assert.equal((await api.getSigned({ q: "y" })).secret, "signed-ok");
   assert.ok(browser.calls.some((c) => c.url.includes("/api/signed")));
 });
 

@@ -157,7 +157,10 @@ async function proxyPath(ctx: SiteCtx, client: SiteApi): Promise<boolean> {
 function allowedHost(request: IncomingMessage): boolean {
   const host = request.headers.host ?? "";
   const origin = request.headers.origin;
-  return /^(127\.0\.0\.1|localhost):\d+$/.test(host) && (!origin || origin === `http://${host}`);
+  // Pages on other sites may not call in; browser extensions may (calls still need the token).
+  const allowedOrigin =
+    !origin || origin === `http://${host}` || /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+  return /^(127\.0\.0\.1|localhost):\d+$/.test(host) && allowedOrigin;
 }
 
 export async function serve(options: ServeOptions = {}): Promise<Server> {

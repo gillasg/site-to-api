@@ -67,6 +67,8 @@ const page = await api.productPage({ productSlug: "red-lamp" }); // server-rende
 
 Each mapped site also gets a generated, fully typed client (`client.ts`), so editors autocomplete operations, parameters and responses.
 
+Apps that already drive a browser can plug it in: anything with `run(code, { session, timeoutMs })` and `status()` works as the browser, either per call (`siteApi(site, { bridge: async () => myBrowser })`) or for the whole process (`useBrowser(myBrowser)`).
+
 ### MCP
 
 ```json

@@ -37,7 +37,16 @@ type Waiter = {
   onEvent?: (event: Record<string, unknown>) => void;
 };
 
-export class Bridge {
+/** What the runtime needs from a browser connection; anything that can run browser code fits. */
+export interface Bridge {
+  /** Runs browser code in a named session (tabs and variables persist per session). */
+  run(code: string, options?: { session?: string; timeoutMs?: number }): Promise<unknown>;
+  status(): Promise<{ browsers: number }>;
+  close(): void;
+}
+
+/** The Browser Use Extension bridge, over its local WebSocket. */
+export class BridgeClient implements Bridge {
   private sequence = 0;
   private readonly waiting = new Map<number, Waiter>();
 
@@ -59,7 +68,7 @@ export class Bridge {
     });
   }
 
-  static async connect(): Promise<Bridge> {
+  static async connect(): Promise<BridgeClient> {
     let state: { port: number; token: string };
     try {
       state = JSON.parse(
@@ -90,7 +99,7 @@ export class Bridge {
         { once: true },
       );
     });
-    return new Bridge(socket);
+    return new BridgeClient(socket);
   }
 
   private request(
@@ -135,9 +144,17 @@ export class Bridge {
 
 /** One shared connection per process, opened on first use. */
 let shared: Promise<Bridge> | undefined;
+let custom: Bridge | undefined;
+
+/** Routes every browser call through another connection (an app that runs browser code itself). */
+export function useBrowser(bridge: Bridge | undefined): void {
+  custom = bridge;
+  shared = undefined;
+}
 
 export function sharedBridge(): Promise<Bridge> {
-  shared ??= Bridge.connect().catch((error: unknown) => {
+  if (custom) return Promise.resolve(custom);
+  shared ??= BridgeClient.connect().catch((error: unknown) => {
     shared = undefined;
     throw error;
   });

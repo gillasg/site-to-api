@@ -51,6 +51,12 @@ test("the REST server: docs, spec, operation calls, the site's own paths, and a 
     body: "{}",
   });
   assert.equal(foreign.status, 403);
+  const fromExtension = await fetch(`${base}/ops/listProducts`, {
+    method: "POST",
+    headers: { ...headers, origin: "chrome-extension://kcfodpkdfapojnbhkgdlpkikipneejpf" },
+    body: JSON.stringify({ limit: 1 }),
+  });
+  assert.equal(fromExtension.status, 200, "browser extensions may call, with the token");
 });
 
 function mcp(env, args) {
