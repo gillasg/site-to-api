@@ -5,7 +5,7 @@
 //   node scripts/link-repos.mjs                 the repos this one uses
 //   node scripts/link-repos.mjs --also <repo>   plus another repo that uses this one (for CI)
 //   node scripts/link-repos.mjs --revisions     print the revision of each linked repo
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,12 +53,9 @@ function order(names) {
 }
 
 function run(command, commandArgs, cwd) {
-  process.stdout.write(`> ${command} ${commandArgs.join(" ")}  (${basename(cwd)})\n`);
-  execFileSync(command, commandArgs, {
-    cwd,
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
+  const line = [command, ...commandArgs].map((part) => (/\s/.test(part) ? `"${part}"` : part));
+  process.stdout.write(`> ${line.join(" ")}  (${basename(cwd)})\n`);
+  execSync(line.join(" "), { cwd, stdio: "inherit" });
 }
 
 function revision(name) {
@@ -85,7 +82,7 @@ if (args.includes("--revisions")) {
     const dir = folder(name);
     if (!existsSync(join(dir, "package.json")))
       run("git", ["clone", "--depth", "1", `${OWNER}/${name}.git`, dir], parent);
-    run("pnpm", ["install", ...(ci ? ["--frozen-lockfile"] : [])], dir);
+    run("pnpm", ["install", "--ignore-scripts", ...(ci ? ["--frozen-lockfile"] : [])], dir);
     if (REPOS[name].build) run("pnpm", ["run", REPOS[name].build], dir);
   }
 }
