@@ -9,9 +9,10 @@ import {
   DirectTransport,
   MissingParams,
   useBrowser,
+  watch,
 } from "../dist/index.js";
 import { startFixtureSite } from "./fixture-site.mjs";
-import { browseShop, NodeRecorder } from "./helpers.mjs";
+import { browseShop, NodeRecorder, tempHome } from "./helpers.mjs";
 import { FakeBrowser } from "./fake-browser.mjs";
 
 async function shop(t, extra) {
@@ -204,4 +205,23 @@ test("direct calls with an exported session send its cookies", async (t) => {
 
 test("the page transport reuses PageTransport's tab code", () => {
   assert.equal(typeof new PageTransport(async () => ({})).inPage, "function");
+});
+
+test("watch reports only items that are new, changed or gone since the last check", async (t) => {
+  await tempHome(t);
+  const { model } = await shop(t);
+  const options = { model, transport: "direct", session: false, name: "products" };
+  const first = await watch(model.site, "listProducts", { limit: 2 }, options);
+  assert.equal(first.first, true);
+  assert.equal(first.total, 2);
+  assert.deepEqual(first.new, []);
+  const same = await watch(model.site, "listProducts", { limit: 2 }, options);
+  assert.equal(same.first, false);
+  assert.deepEqual([same.new.length, same.changed.length, same.removed.length], [0, 0, 0]);
+  const more = await watch(model.site, "listProducts", { limit: 3 }, options);
+  assert.equal(more.new.length, 1);
+  assert.equal(more.new[0].id, 1002);
+  const fewer = await watch(model.site, "listProducts", { limit: 2 }, options);
+  assert.deepEqual(fewer.removed, ["1002"]);
+  assert.equal(fewer.new.length, 0, "an item seen before is not new again");
 });

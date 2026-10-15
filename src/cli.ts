@@ -31,6 +31,8 @@ import { sessionExportExpression, type SessionFile } from "./runtime/session.js"
 import { siteApi } from "./runtime/site-api.js";
 import { PageTransport } from "./runtime/transports.js";
 import { serve } from "./serve.js";
+import { explore } from "./explore.js";
+import { watch } from "./watch.js";
 import { importCaptures, loadFlows, rebuild, saveRecording } from "./workflow.js";
 import type { SiteModel } from "./types.js";
 
@@ -40,6 +42,7 @@ Map a site
   record <url> [--name n] [--attach <tab>] [--no-build]   record a flow in your browser, then build
   record --passive <domain,...>                           record every tab on these domains
   describe <site> "<flow>" [--url u]                      an AI agent performs the flow while recording
+  explore <site> [site ...] [--goal g] [--parallel n]     an AI agent uses each site to map it, in parallel
   import <site> <file.har|flows> ...                      add HAR or mitmproxy captures
   build <site> [--until ${STAGES.join("|")}] [--work dir]  rebuild from all flows
   edit <site> "<change>"                                  change the API in plain English
@@ -48,6 +51,7 @@ Map a site
 Use it
   sites | ops <site>                                      list sites / operations
   call <site> <operation> [json] [--param k=v] [--all] [--max-items n] [--transport page|direct]
+  watch <site> <operation> [json] [--key f] [--items p]   only what is new or changed since the last check
   serve [--port n]                                        local REST API + docs for every site
   mcp [site]                                              stdio MCP server
   session <site>                                          export your session for calls without a browser
@@ -182,6 +186,34 @@ async function call(args: Args): Promise<void> {
     ? await api.fetchPage(operation, params as Record<string, string>)
     : await api.call(operation, params);
   out(typeof result === "string" ? result : JSON.stringify(result, null, 2));
+}
+
+async function watchCommand(args: Args, site: string): Promise<void> {
+  const operation = args.positional[2];
+  if (!operation) throw new Error("Usage: site-to-api watch <site> <operation> [json]");
+  const options = Object.fromEntries(
+    (["key", "items", "name"] as const).flatMap((name) => {
+      const value = flag(args, name);
+      return value ? [[name, value]] : [];
+    }),
+  );
+  out(JSON.stringify(await watch(site, operation, callParams(args), options), null, 2));
+}
+
+async function exploreCommand(args: Args): Promise<void> {
+  const sites = args.positional.slice(1);
+  if (!sites.length) throw new Error("Usage: site-to-api explore <site> [site ...]");
+  const goal = flag(args, "goal");
+  await explore(sites, {
+    ...(goal ? { goal } : {}),
+    parallel: Number(flag(args, "parallel") ?? 3),
+    onSite: (result) =>
+      out(
+        result.error
+          ? `${result.site}\tfailed: ${result.error}`
+          : `${result.site}\t${result.operations} operations (version ${result.version})`,
+      ),
+  });
 }
 
 async function exportSession(site: string): Promise<void> {
@@ -356,6 +388,7 @@ async function signIn(): Promise<void> {
 /** Commands that work without a site. */
 const GLOBAL: Record<string, (args: Args) => Promise<void>> = {
   record,
+  explore: exploreCommand,
   sites: async () => {
     for (const s of await listSites())
       out(`${s.site}\t${s.operations} operations\t${s.updated.slice(0, 10)}`);
@@ -375,6 +408,7 @@ const PER_SITE: Record<string, (args: Args, site: string) => Promise<void>> = {
   },
   ops: (_args, site) => listOperations(site),
   call: (args) => call(args),
+  watch: watchCommand,
   session: (_args, site) => exportSession(site),
   export: (args, site) => exportFiles(site, resolve(flag(args, "out") ?? `${siteName(site)}-api`)),
   heal,

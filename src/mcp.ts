@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import { explore } from "./explore.js";
+import { watch } from "./watch.js";
 import { listSites, loadModel, siteName } from "./registry.js";
 import { siteApi, type SiteApi, type SiteApiOptions } from "./runtime/site-api.js";
 import type { JsonSchema, Operation, PageEndpoint, Param, SiteModel } from "./types.js";
@@ -94,6 +96,35 @@ const GENERAL_TOOLS: Json[] = [
       required: ["site", "operation"],
     },
   },
+  {
+    name: "watch_operation",
+    description:
+      "Call an operation again and get only the items that are new or changed since the last check of the same watch (new listings, price changes, new messages). The first check returns first: true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site: { type: "string" },
+        operation: { type: "string" },
+        params: { type: "object" },
+        key: { type: "string", description: "Field identifying an item (default: id, url, ...)." },
+        items: { type: "string", description: "Dot path to the list in the result." },
+      },
+      required: ["site", "operation"],
+    },
+  },
+  {
+    name: "explore_sites",
+    description:
+      "Map sites by name: an AI agent uses each one in the browser (search, filters, pages, details) while it is recorded, then builds its API. Needs a connected model.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sites: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
+        goal: { type: "string", description: "Extra things to do on each site." },
+      },
+      required: ["sites"],
+    },
+  },
 ];
 
 async function callTool(api: SiteApi, operation: string, params: Json): Promise<unknown> {
@@ -106,6 +137,13 @@ async function callTool(api: SiteApi, operation: string, params: Json): Promise<
     return items;
   }
   return api.call(operation, rest);
+}
+
+function watchTool(args: Json): Promise<unknown> {
+  return watch(String(args.site), String(args.operation), (args.params as Json | undefined) ?? {}, {
+    ...(typeof args.key === "string" ? { key: args.key } : {}),
+    ...(typeof args.items === "string" ? { items: args.items } : {}),
+  });
 }
 
 function textResult(value: unknown, isError = false): Json {
@@ -150,6 +188,11 @@ export async function runMcpServer(site?: string, options: SiteApiOptions = {}):
         input: tool.inputSchema,
       }));
     }
+    if (name === "watch_operation") return watchTool(args);
+    if (name === "explore_sites")
+      return explore(args.sites as string[], {
+        ...(typeof args.goal === "string" ? { goal: args.goal } : {}),
+      });
     if (name !== "call_operation") throw new Error(`Unknown tool ${String(name)}`);
     const maxItems = typeof args.maxItems === "number" ? { maxItems: args.maxItems } : {};
     return callTool(await api(String(args.site)), String(args.operation), {

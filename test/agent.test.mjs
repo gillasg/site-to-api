@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   performFlow,
+  explore,
   editApi,
   nameOperations,
   saveFlow,
@@ -121,4 +122,30 @@ test("AI names: new ids and descriptions land in the overrides", async (t) => {
   await nameOperations(name, { model });
   const operation = (await loadModel(name)).operations.find((op) => op.id === "latestNews");
   assert.equal(operation.description, "The news banner.");
+});
+
+test("explore maps sites by name or URL: the agent uses each one while it is recorded", async (t) => {
+  await tempHome(t);
+  const site = await startFixtureSite();
+  t.after(() => site.close());
+  const code = `await page.inspect("fetch('/api/products?limit=2').then((r) => r.json()).then((j) => j.items.length)")`;
+  const model = scriptedModel([
+    { tool: "browser_code", args: { code } },
+    { tool: "done", args: { summary: "Searched and opened products." } },
+  ]);
+  const browser = new FakeBrowser();
+  const seen = [];
+  const results = await explore([site.origin + "/", site.origin + "/again"], {
+    model,
+    bridge: async () => browser,
+    onSite: (result) => seen.push(result.site),
+  });
+  assert.equal(results.length, 1, "the same site twice is explored once");
+  assert.equal(results[0].summary, "Searched and opened products.");
+  assert.ok(results[0].operations >= 1, JSON.stringify(results[0]));
+  assert.deepEqual(seen, [siteName(site.origin)]);
+  assert.match(model.seen[0].messages[0].content, /never buy/);
+  assert.ok(
+    (await loadModel(siteName(site.origin))).operations.some((op) => op.id === "listProducts"),
+  );
 });

@@ -30,14 +30,15 @@ for await (const product of shop.paginate.listProducts({ category: "audio" }))
 
 ## Map a site
 
-| Command                        | What it does                                                                                                            |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `record <url>`                 | Opens the site in a new tab and records everything while you use it. Press Enter when done.                             |
-| `record <url> --attach <tab>`  | Records a tab you already have open (a tab id, or text from its title or URL).                                          |
-| `record --passive a.com,b.com` | Records every tab on those domains, including ones opened later, until you press Enter.                                 |
-| `describe <site> "<flow>"`     | An AI agent performs the flow in your browser while it is recorded (needs a model; see below).                          |
-| `import <site> <files>`        | Adds HAR files (from any tool) or mitmproxy flow files. Captures merge; nothing is overwritten.                         |
-| `build <site>`                 | Rebuilds the API from every flow. `--until filter\|normalize\|infer\|trace` stops early and writes each stage's output. |
+| Command                        | What it does                                                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `record <url>`                 | Opens the site in a new tab and records everything while you use it. Press Enter when done.                                                                         |
+| `record <url> --attach <tab>`  | Records a tab you already have open (a tab id, or text from its title or URL).                                                                                      |
+| `record --passive a.com,b.com` | Records every tab on those domains, including ones opened later, until you press Enter.                                                                             |
+| `describe <site> "<flow>"`     | An AI agent performs the flow in your browser while it is recorded (needs a model; see below).                                                                      |
+| `explore <site> [site ...]`    | An AI agent uses each site (search, filters, pages, details) in a background tab while it is recorded, then builds it. Several at once; `--goal` adds things to do. |
+| `import <site> <files>`        | Adds HAR files (from any tool) or mitmproxy flow files. Captures merge; nothing is overwritten.                                                                     |
+| `build <site>`                 | Rebuilds the API from every flow. `--until filter\|normalize\|infer\|trace` stops early and writes each stage's output.                                             |
 
 Each build writes a new version only when the API changed, and prints what changed.
 
@@ -75,7 +76,7 @@ Apps that already drive a browser can plug it in: anything with `run(code, { ses
 { "mcpServers": { "shop": { "command": "npx", "args": ["site-to-api", "mcp", "shop.example"] } } }
 ```
 
-Leave out the site to get `list_sites`, `list_operations` and `call_operation` across every mapped site.
+Leave out the site to get `list_sites`, `list_operations`, `call_operation`, `watch_operation` and `explore_sites` across every mapped site.
 
 ## What it understands
 
@@ -137,6 +138,7 @@ Results go to `health.json` and `events.jsonl` in the site's folder, so other to
 Recording, building and calling never need a model. These do:
 
 - `describe <site> "<flow>"`: an agent performs the flow in your browser while it is recorded. Its steps are saved, so repairs repeat them without a model.
+- `explore <site> [site ...]`: map sites by name; an agent uses each one (looking only, never buying or posting) while it is recorded.
 - `edit <site> "<change>"`: change the API in plain English ("rename getMe to currentUser", "add a page extractor for product pages with name and price").
 - `name <site>`: better operation names and descriptions.
 

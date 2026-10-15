@@ -12,7 +12,7 @@ type ToolCall = { type: "toolCall"; id: string; name: string; arguments: Record<
 type Content = { type: string; text?: string } | ToolCall;
 type Message = Record<string, unknown> & { role: string; content: unknown };
 
-interface ModelLike {
+export interface ModelLike {
   complete(context: {
     systemPrompt: string;
     messages: Message[];
@@ -83,6 +83,10 @@ export interface FlowOptions {
   model?: ModelLike;
   bridge?: () => Promise<Bridge>;
   onStep?: (code: string) => void;
+  /** Browser session for the recording (separate sessions record in parallel). */
+  session?: string;
+  /** Bring the recorded tab to the front. Default true. */
+  foreground?: boolean;
 }
 
 const FLOW_TOOLS = [
@@ -158,6 +162,8 @@ export async function performFlow(
   const session = await RecordingSession.start({
     url: options.startUrl ?? `https://${name}/`,
     ...(options.bridge ? { bridge: options.bridge } : {}),
+    ...(options.session ? { session: options.session } : {}),
+    ...(options.foreground === false ? { foreground: false } : {}),
   });
   const agent = new FlowAgent(session, options.onStep);
   const messages: Message[] = [

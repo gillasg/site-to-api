@@ -33,5 +33,8 @@ export { checkHealth, repair, readHealth, type HealthReport, type HealthResult }
 export { coverage, type Suggestion } from "./coverage.js";
 export { serve, type Server, type ServeOptions } from "./serve.js";
 export { runMcpServer } from "./mcp.js";
-export { performFlow, editApi, nameOperations, connectModel } from "./agent.js";
+export { performFlow, editApi, nameOperations, connectModel, type ModelLike } from "./agent.js";
+export { explore, EXPLORE_BRIEF, type ExploreOptions, type ExploreResult } from "./explore.js";
+export { watch, type WatchOptions, type WatchResult } from "./watch.js";
+export { isSiteApiRequest, handleSiteApiRequest, type SiteApiRequest } from "./requests.js";
 export * from "./runtime/index.js";
