@@ -124,7 +124,12 @@ export const BROWSER_USER_AGENT =
 export class DirectTransport implements Transport {
   readonly name = "direct" as const;
 
-  constructor(private readonly session?: SessionFile) {}
+  constructor(private session?: SessionFile) {}
+
+  /** Swaps in a renewed session. */
+  useSession(session: SessionFile): void {
+    this.session = session;
+  }
 
   private sessionValue(
     source: NonNullable<SecurityScheme["source"]>,

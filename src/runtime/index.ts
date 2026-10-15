@@ -1,5 +1,29 @@
 // The runtime, importable on its own: `import { siteApi } from "site-to-api/runtime"`.
-export { siteApi, SiteClient, HttpError, type SiteApi, type SiteApiOptions } from "./site-api.js";
+export {
+  docsExpression,
+  docsTargets,
+  summarizeDocs,
+  type DocsSummary,
+  type SiteDocs,
+} from "./docs.js";
+export {
+  siteApi,
+  SiteClient,
+  HttpError,
+  SignedOut,
+  errorKind,
+  type ErrorKind,
+  type SiteApi,
+  type SiteApiOptions,
+} from "./site-api.js";
+export { runAction, acceptedInputs, type SiteAction, type ActionResult } from "./actions.js";
+export {
+  channelStartExpression,
+  channelStopExpression,
+  type ChannelOptions,
+  type ChannelResult,
+} from "./channels.js";
+export { exportSession } from "./session-export.js";
 export {
   type Bridge,
   BridgeClient,

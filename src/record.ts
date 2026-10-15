@@ -20,6 +20,8 @@ export interface RecordOptions {
   /** Bring the tab to the front so the user can use it. Default true. */
   foreground?: boolean;
   session?: string;
+  /** Block requests that would change something (they are recorded, not sent): map actions safely. */
+  dryRun?: boolean;
 }
 
 const SESSION = "site-to-api-record";
@@ -47,7 +49,7 @@ export class RecordingSession {
 const __tabs = typeof __match === 'number' ? [{ tabId: __match }] : await browser.tabs(__match);
 if (!__tabs.length) throw new Error('No open tab matches ' + __match);
 globalThis.__recTabs = [await browser.attachTab(__tabs[0].tabId)];
-await globalThis.__recTabs[0].network.start({ types: 'all' });
+await globalThis.__recTabs[0].network.start({ types: 'all'${options.dryRun ? ", dryRun: true" : ""} });
 'recording'`,
         { session },
       );
@@ -57,7 +59,7 @@ await globalThis.__recTabs[0].network.start({ types: 'all' });
       // Tabs open on web pages only, so the first load happens before recording starts and
       // the page is loaded again once it has.
       `globalThis.__recTabs = [await browser.openTab(${JSON.stringify(options.url)}, { foreground: ${foreground}, new: true })];
-await globalThis.__recTabs[0].network.start({ types: 'all' });
+await globalThis.__recTabs[0].network.start({ types: 'all'${options.dryRun ? ", dryRun: true" : ""} });
 await globalThis.__recTabs[0].navigate(${JSON.stringify(options.url)});
 'recording'`,
       { session },

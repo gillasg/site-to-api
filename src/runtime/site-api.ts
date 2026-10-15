@@ -17,6 +17,15 @@ import {
 import type { SessionFile } from "./session.js";
 import { DirectTransport, PageTransport, type CallContext, type Transport } from "./transports.js";
 import { pageExtractExpression } from "./page-extract.js";
+import { runAction, type ActionResult, type SiteAction } from "./actions.js";
+import {
+  channelStartExpression,
+  channelStopExpression,
+  type ChannelOptions,
+  type ChannelResult,
+} from "./channels.js";
+import { exportSession } from "./session-export.js";
+import { docsExpression, docsTargets, type SiteDocs } from "./docs.js";
 import { paginate, type PaginateOptions } from "./paginate.js";
 
 // The runtime: `const api = await siteApi("shop.example")`, then `await api.searchProducts({ q })`
@@ -31,9 +40,16 @@ export interface SiteApiOptions {
   rateLimit?: { perSecond?: number; concurrency?: number };
   retries?: number;
   bridge?: () => Promise<Bridge>;
+  /**
+   * Renews an exported session that expired or was refused, from the user's browser (default:
+   * on whenever a session was exported). Calls then keep running without the browser.
+   */
+  refreshSession?: (() => Promise<SessionFile | undefined>) | false;
   /** Custom transports (for tests or other runtimes). */
   transports?: { page?: Transport; direct?: Transport };
   signers?: Record<string, string>;
+  /** Saved multi-step actions (default: the site's overrides). */
+  actions?: Record<string, SiteAction>;
 }
 
 export class HttpError extends Error {
@@ -48,7 +64,30 @@ export class HttpError extends Error {
   }
 }
 
+/** The site refused the call as signed out (401/403 even after renewing auth). */
+export class SignedOut extends HttpError {
+  constructor(operationId: string, response: RuntimeResponse) {
+    super(operationId, response);
+    this.name = "SignedOut";
+    this.message = `Signed out of the site: ${this.message}. Sign in to it in the browser, then call again.`;
+  }
+}
+
+export type ErrorKind = "signed-out" | "missing-input" | "browser-offline" | "broken" | "failed";
+
+/** What kind of failure an error is, so callers know what to do next. */
+export function errorKind(error: unknown): ErrorKind {
+  const cause = (error as { cause?: unknown } | undefined)?.cause;
+  if (cause instanceof Error) return errorKind(cause);
+  if (error instanceof SignedOut) return "signed-out";
+  if (error instanceof MissingParams) return "missing-input";
+  if (error instanceof BrowserNotConnected) return "browser-offline";
+  if (error instanceof HttpError) return "broken";
+  return "failed";
+}
+
 const SESSION_FRESH_MS = 12 * 3600_000;
+const REFRESH_EVERY_MS = 10 * 60_000;
 
 export class SiteClient {
   readonly site: string;
@@ -56,6 +95,7 @@ export class SiteClient {
   private readonly page: Transport;
   private readonly direct: Transport;
   private readonly cache = new Map<string, { value: string; at: number }>();
+  private refreshedAt = 0;
 
   constructor(
     readonly model: SiteModel,
@@ -95,7 +135,7 @@ export class SiteClient {
     return this.model.security.filter((scheme) => operation.security.includes(scheme.name));
   }
 
-  private chooseTransport(operation: Operation): Transport {
+  private async chooseTransport(operation: Operation): Promise<Transport> {
     const mode = this.options.transport ?? "auto";
     if (mode === "page") return this.page;
     if (mode === "direct") return this.direct;
@@ -106,8 +146,25 @@ export class SiteClient {
     );
     if (!needsBrowserState) return this.direct;
     const session = this.options.session;
-    const fresh = session && Date.now() - Date.parse(session.savedAt) < SESSION_FRESH_MS;
+    if (session && Date.now() - Date.parse(session.savedAt) >= SESSION_FRESH_MS)
+      await this.refreshSession();
+    const fresh =
+      this.options.session &&
+      Date.now() - Date.parse(this.options.session.savedAt) < SESSION_FRESH_MS;
     return fresh ? this.direct : this.page;
+  }
+
+  /** Renews the exported session from the browser (at most every 10 minutes); true when renewed. */
+  private async refreshSession(): Promise<boolean> {
+    const refresh = this.options.refreshSession;
+    if (!refresh || !this.options.session || Date.now() - this.refreshedAt < REFRESH_EVERY_MS)
+      return false;
+    this.refreshedAt = Date.now();
+    const renewed = await refresh().catch(() => undefined);
+    if (!renewed) return false;
+    this.options.session = renewed;
+    (this.direct as Partial<DirectTransport>).useSession?.(renewed);
+    return true;
   }
 
   /** Auth values that come from another operation's response (a token endpoint). */
@@ -259,8 +316,12 @@ export class SiteClient {
     depth: number,
     sent: { request: RuntimeRequest; context: CallContext; transport: Transport },
   ): Promise<RuntimeResponse | undefined> {
-    if (this.options.transport === "direct") return undefined;
     for (const key of [...this.cache.keys()]) if (key.startsWith("auth:")) this.cache.delete(key);
+    if (sent.transport === this.direct && (await this.refreshSession())) {
+      const retried = await this.send(this.direct, sent.request, sent.context);
+      if (retried.status !== 401 && retried.status !== 403) return retried;
+    }
+    if (this.options.transport === "direct") return undefined;
     if (sent.transport === this.direct && (this.options.transport ?? "auto") === "auto")
       return this.send(this.page, sent.request, sent.context);
     if (!this.schemes(operation).some((s) => s.refresh)) return undefined;
@@ -272,7 +333,7 @@ export class SiteClient {
   async request(id: string, params: Params = {}, depth = 0): Promise<RuntimeResponse> {
     const operation = this.operation(id);
     const request = await this.prepare(operation, params, depth);
-    const chosen = this.chooseTransport(operation);
+    const chosen = await this.chooseTransport(operation);
     Object.assign(
       request.headers,
       await this.responseAuth(operation, params, depth),
@@ -289,8 +350,58 @@ export class SiteClient {
   /** The operation's data; throws HttpError on 4xx/5xx. */
   async call(id: string, params: Params = {}): Promise<unknown> {
     const response = await this.request(id, params);
+    if (response.status === 401 || response.status === 403) throw new SignedOut(id, response);
     if (response.status >= 400 || response.status === 0) throw new HttpError(id, response);
     return response.json ?? response.text;
+  }
+
+  /** The site's saved multi-step actions (overrides.actions). */
+  get actions(): Record<string, SiteAction> {
+    return this.options.actions ?? {};
+  }
+
+  /** Runs a saved multi-step action: each step's result feeds the next (see actions.ts). */
+  async action(name: string, inputs: Params = {}): Promise<ActionResult> {
+    const action = this.actions[name];
+    if (!action)
+      throw new Error(
+        `${this.site} has no action ${name}. Known: ${Object.keys(this.actions).join(", ") || "none"}`,
+      );
+    return runAction(this, action, inputs, name);
+  }
+
+  /** Talks to one of the site's live channels (WebSocket or event stream) from its page. */
+  async channel(id: string, options: ChannelOptions = {}): Promise<ChannelResult> {
+    const channel = this.model.channels.find((item) => item.id === id);
+    if (!channel)
+      throw new Error(
+        `${this.site} has no channel ${id}. Known: ${this.model.channels.map((c) => c.id).join(", ") || "none"}`,
+      );
+    const transport = this.page as Partial<PageTransport>;
+    if (!transport.inPage) throw new Error("Channels need the browser");
+    const inPage = transport.inPage.bind(transport);
+    const host = this.model.operations[0] ?? { origin: `https://${this.site}` };
+    const home = this.home(host);
+    const key = `${id}-${Date.now()}`;
+    await inPage(home, channelStartExpression(channel, key, options));
+    await sleep(Math.min(Math.max(options.seconds ?? 10, 1), 120) * 1000);
+    const result = (await inPage(home, channelStopExpression(key))) as Omit<
+      ChannelResult,
+      "channel" | "url"
+    >;
+    return { channel: id, url: channel.url, ...result };
+  }
+
+  /** The site's published API documents and GraphQL schemas, read from its page (see docs.ts). */
+  async docs(): Promise<SiteDocs> {
+    const transport = this.page as Partial<PageTransport>;
+    if (!transport.inPage) throw new Error("Reading a site's API documents needs the browser");
+    const host = this.model.operations[0] ?? { origin: `https://${this.site}` };
+    return (await transport.inPage.call(
+      transport,
+      this.home(host),
+      docsExpression(docsTargets(this.model)),
+    )) as SiteDocs;
   }
 
   paginate(id: string, params: Params = {}, options: PaginateOptions = {}): AsyncIterable<unknown> {
@@ -347,6 +458,25 @@ export type SiteApi = SiteClient &
     >;
   };
 
+async function initialSession(
+  model: SiteModel,
+  options: SiteApiOptions,
+): Promise<SessionFile | undefined> {
+  if (options.session === false) return undefined;
+  return options.session ?? (await readSession(model.site));
+}
+
+/** A session the user exported is renewed from their browser when it expires or is refused. */
+function sessionRefresher(
+  model: SiteModel,
+  options: SiteApiOptions,
+): (() => Promise<SessionFile | undefined>) | undefined {
+  if (options.refreshSession === false) return undefined;
+  return (
+    options.refreshSession ?? (async () => (await exportSession(model, options.bridge)).session)
+  );
+}
+
 /** Opens a mapped site from the registry (or a given model) as a callable API. */
 export async function siteApi(site: string, options: SiteApiOptions = {}): Promise<SiteApi> {
   const model = options.model ?? (await loadModel(site));
@@ -355,15 +485,22 @@ export async function siteApi(site: string, options: SiteApiOptions = {}): Promi
       `${siteName(site)} is not mapped yet. Record it first: npx site-to-api record https://${siteName(site)}`,
     );
   const overrides = options.model ? {} : await readOverrides(site);
-  const session =
-    options.session === false ? undefined : (options.session ?? (await readSession(model.site)));
+  const session = await initialSession(model, options);
   const { session: _ignored, ...rest } = options;
   void _ignored;
+  const refreshSession = sessionRefresher(model, options);
   const client = new SiteClient(model, {
     ...rest,
     ...(session ? { session } : {}),
+    ...(refreshSession ? { refreshSession } : {}),
     signers: { ...(overrides.signers ?? {}), ...(options.signers ?? {}) },
+    actions: { ...(overrides.actions ?? {}), ...(options.actions ?? {}) },
   });
+  return callable(client);
+}
+
+/** Operations, page endpoints and actions as methods: api.searchProducts({ q }). */
+function callable(client: SiteClient): SiteApi {
   // api.paginate("listItems", params) and api.paginate.listItems(params) both work.
   const pagers = new Proxy(
     (id: string, params?: Params, opts?: PaginateOptions) => client.paginate(id, params, opts),
@@ -380,6 +517,7 @@ export async function siteApi(site: string, options: SiteApiOptions = {}): Promi
           return (params?: Params) => target.call(name, params);
         if (target.pageEndpoint(name))
           return (params?: Record<string, string>) => target.fetchPage(name, params);
+        if (target.actions[name]) return (inputs?: Params) => target.action(name, inputs);
       }
       return Reflect.get(target, name, receiver);
     },

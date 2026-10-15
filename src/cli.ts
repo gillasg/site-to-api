@@ -1,15 +1,8 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
-import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { coverage } from "./coverage.js";
-import { originMatches } from "./filter.js";
 import { formatDiff, diffModels } from "./diff.js";
-import { generateClient } from "./emit/client.js";
-import { htmlReport } from "./emit/html.js";
-import { toAsyncApi, toOpenApi } from "./emit/openapi.js";
-import { markdownReport, redactedSamples } from "./emit/report.js";
-import { toYaml } from "./emit/yaml.js";
 import { checkHealth, repair } from "./health.js";
 import { runMcpServer } from "./mcp.js";
 import { STAGES, type Stage } from "./pipeline.js";
@@ -24,14 +17,15 @@ import {
   siteDir,
   siteName,
   versions,
-  writeSession,
+  writeOverrides,
 } from "./registry.js";
 import { closeSharedBridge } from "./runtime/bridge.js";
-import { sessionExportExpression, type SessionFile } from "./runtime/session.js";
-import { siteApi } from "./runtime/site-api.js";
-import { PageTransport } from "./runtime/transports.js";
+import { exportSession } from "./runtime/session-export.js";
+import { errorKind, siteApi } from "./runtime/site-api.js";
 import { serve } from "./serve.js";
 import { explore } from "./explore.js";
+import { readDocs } from "./docs.js";
+import { exportSite, signingInfo } from "./tool.js";
 import { watch } from "./watch.js";
 import { importCaptures, loadFlows, rebuild, saveRecording } from "./workflow.js";
 import type { SiteModel } from "./types.js";
@@ -43,8 +37,10 @@ Map a site
   record --passive <domain,...>                           record every tab on these domains
   describe <site> "<flow>" [--url u]                      an AI agent performs the flow while recording
   explore <site> [site ...] [--goal g] [--parallel n]     an AI agent uses each site to map it, in parallel
+      --actions                                           also map its actions (like, send, post) in dry run: blocked, never sent
   import <site> <file.har|flows> ...                      add HAR or mitmproxy captures
   build <site> [--until ${STAGES.join("|")}] [--work dir]  rebuild from all flows
+  docs <site>                                             its published API documents and GraphQL schemas
   edit <site> "<change>"                                  change the API in plain English
   name <site>                                             AI names and descriptions for operations
 
@@ -52,6 +48,9 @@ Use it
   sites | ops <site>                                      list sites / operations
   call <site> <operation> [json] [--param k=v] [--all] [--max-items n] [--transport page|direct]
   watch <site> <operation> [json] [--key f] [--items p]   only what is new or changed since the last check
+  action <site> [name] [json]                             list or run multi-step actions
+  action <site> <name> --steps a,b,c [--description d]    save one (each step's result feeds the next)
+  channel <site> [id] [--send json] [--seconds n]         list live channels, or listen on one (and send)
   serve [--port n]                                        local REST API + docs for every site
   mcp [site]                                              stdio MCP server
   session <site>                                          export your session for calls without a browser
@@ -206,6 +205,7 @@ async function exploreCommand(args: Args): Promise<void> {
   const goal = flag(args, "goal");
   await explore(sites, {
     ...(goal ? { goal } : {}),
+    ...(args.flags.actions === true ? { actions: true } : {}),
     parallel: Number(flag(args, "parallel") ?? 3),
     onSite: (result) =>
       out(
@@ -216,58 +216,60 @@ async function exploreCommand(args: Args): Promise<void> {
   });
 }
 
-async function exportSession(site: string): Promise<void> {
-  const model = await loadModel(site);
-  if (!model) throw new Error(`${siteName(site)} is not mapped yet.`);
-  const page = new PageTransport();
-  const home =
-    model.origins.find((o) => originMatches(new URL(o), model.site)) ?? `https://${model.site}`;
-  const info = (await page.inPage(home + "/", sessionExportExpression())) as {
-    userAgent: string;
-    language: string;
-    origin: string;
-    localStorage: Record<string, string>;
-    sessionStorage: Record<string, string>;
-  };
-  const { sharedBridge } = await import("./runtime/bridge.js");
-  const cookies = (await (
-    await sharedBridge()
-  ).run(
-    `(await globalThis.__siteToApiTabs[${JSON.stringify(new URL(home).origin)}].cdp('Network.getCookies', { urls: ${JSON.stringify(model.origins.map((o) => o + "/"))} })).cookies`,
-    { session: "site-to-api" },
-  )) as SessionFile["cookies"];
-  const session: SessionFile = {
-    site: model.site,
-    savedAt: new Date().toISOString(),
-    userAgent: info.userAgent,
-    language: info.language,
-    cookies,
-    localStorage: { [info.origin]: info.localStorage },
-    sessionStorage: { [info.origin]: info.sessionStorage },
-  };
-  const path = await writeSession(session);
+async function exportSessionCommand(site: string): Promise<void> {
+  const { session, path } = await exportSession(await mappedModel(site));
   out(
-    `Saved ${cookies.length} cookies and web storage to ${path} (readable only by you). Calls run without the browser for 12 hours.`,
+    `Saved ${session.cookies.length} cookies and web storage to ${path} (readable only by you). Calls run without the browser, and the session renews itself from the browser when it expires.`,
   );
 }
 
+async function actionCommand(args: Args, site: string): Promise<void> {
+  const [, , name, json] = args.positional;
+  const api = await siteApi(site);
+  if (!name) {
+    for (const [id, action] of Object.entries(api.actions))
+      out(
+        `${id}\t${action.steps.map((s) => s.operation).join(" → ")}\t${action.description ?? ""}`,
+      );
+    return;
+  }
+  const steps = flag(args, "steps");
+  if (steps) {
+    const overrides = await readOverrides(site);
+    const description = flag(args, "description");
+    overrides.actions = {
+      ...(overrides.actions ?? {}),
+      [name]: {
+        ...(description ? { description } : {}),
+        steps: steps.split(",").map((operation) => ({ operation: operation.trim() })),
+      },
+    };
+    await writeOverrides(site, overrides);
+    return out(`Saved action ${name}.`);
+  }
+  const inputs = json ? (JSON.parse(json) as Record<string, unknown>) : {};
+  out(JSON.stringify(await api.action(name, inputs), null, 2));
+}
+
+async function channelCommand(args: Args, site: string): Promise<void> {
+  const [, , id] = args.positional;
+  const api = await siteApi(site);
+  if (!id) {
+    for (const channel of api.model.channels) out(`${channel.id}\t${channel.kind}\t${channel.url}`);
+    return;
+  }
+  const send = flag(args, "send");
+  const match = flag(args, "match");
+  const result = await api.channel(id, {
+    ...(send ? { send: [JSON.parse(send) as unknown] } : {}),
+    ...(match ? { match } : {}),
+    seconds: Number(flag(args, "seconds") ?? 10),
+  });
+  out(JSON.stringify(result, null, 2));
+}
+
 async function exportFiles(site: string, dir: string): Promise<void> {
-  const model = await loadModel(site);
-  if (!model) throw new Error(`${siteName(site)} is not mapped yet.`);
-  const overrides = await readOverrides(site);
-  await mkdir(dir, { recursive: true });
-  const openapi = toOpenApi(model, overrides.redact);
-  await writeFile(join(dir, "openapi.json"), JSON.stringify(openapi, null, 2));
-  await writeFile(join(dir, "openapi.yaml"), toYaml(openapi));
-  const asyncapi = toAsyncApi(model);
-  if (asyncapi) await writeFile(join(dir, "asyncapi.yaml"), toYaml(asyncapi));
-  await writeFile(join(dir, "client.ts"), generateClient(model));
-  await writeFile(join(dir, "report.md"), markdownReport(model, overrides.redact));
-  await writeFile(join(dir, "report.html"), htmlReport(model, overrides.redact));
-  await writeFile(
-    join(dir, "samples.json"),
-    JSON.stringify(redactedSamples(model, overrides.redact), null, 2),
-  );
+  await exportSite(site, dir);
   out(`Exported to ${dir}`);
 }
 
@@ -290,27 +292,17 @@ async function heal(args: Args, site: string): Promise<void> {
 }
 
 async function signing(site: string, operationId: string): Promise<void> {
-  const model = await loadModel(site);
-  const op = model?.operations.find((o) => o.id === operationId);
-  if (!op?.signing) return out(`${operationId} is not signed.`);
-  out(
-    `Signed values: ${[...op.signing.headers, ...op.signing.query].join(", ")}; calls go through the page's ${op.signing.via}.`,
-  );
-  const frame = op.signing.initiator;
-  if (!frame) return;
-  out(`Built by ${frame.functionName || "an anonymous function"} at ${frame.url}:${frame.line}`);
-  const source = await fetch(frame.url)
-    .then((r) => r.text())
-    .catch(() => "");
-  const lines = source.split("\n");
-  if (lines.length > 3)
-    out(
-      lines
-        .slice(Math.max(0, frame.line - 6), frame.line + 6)
-        .join("\n")
-        .slice(0, 4000),
-    );
-  else if (source) out(source.slice(0, 1500));
+  const info = (await signingInfo(site, operationId)) as {
+    signed: boolean;
+    values?: string[];
+    via?: string;
+    builtBy?: string;
+    code?: string;
+  };
+  if (!info.signed) return out(`${operationId} is not signed.`);
+  out(`Signed values: ${info.values?.join(", ")}; calls go through the page's ${info.via}.`);
+  if (info.builtBy) out(`Built by ${info.builtBy}`);
+  if (info.code) out(info.code);
 }
 
 async function mappedModel(site: string): Promise<SiteModel> {
@@ -409,7 +401,10 @@ const PER_SITE: Record<string, (args: Args, site: string) => Promise<void>> = {
   ops: (_args, site) => listOperations(site),
   call: (args) => call(args),
   watch: watchCommand,
-  session: (_args, site) => exportSession(site),
+  session: (_args, site) => exportSessionCommand(site),
+  action: actionCommand,
+  channel: channelCommand,
+  docs: async (_args, site) => out(JSON.stringify(await readDocs(site), null, 2)),
   export: (args, site) => exportFiles(site, resolve(flag(args, "out") ?? `${siteName(site)}-api`)),
   heal,
   signing: (args, site) => signing(site, args.positional[2] ?? ""),
@@ -420,6 +415,15 @@ const PER_SITE: Record<string, (args: Args, site: string) => Promise<void>> = {
     out((await (await import("./agent.js")).editApi(site, args.positional[2] ?? "")).note),
   name: async (_args, site) =>
     out(JSON.stringify(await (await import("./agent.js")).nameOperations(site), null, 2)),
+};
+
+/** Exit codes callers can act on: 2 needs input, 3 signed out, 4 no browser, 5 the API failed. */
+const EXIT_CODES = {
+  failed: 1,
+  "missing-input": 2,
+  "signed-out": 3,
+  "browser-offline": 4,
+  broken: 5,
 };
 
 async function main(argv: string[]): Promise<number> {
@@ -446,6 +450,6 @@ main(process.argv.slice(2)).then(
   async (error: unknown) => {
     process.stderr.write((error instanceof Error ? error.message : String(error)) + "\n");
     await closeSharedBridge();
-    process.exit(1);
+    process.exit(EXIT_CODES[errorKind(error)]);
   },
 );

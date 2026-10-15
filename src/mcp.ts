@@ -1,8 +1,11 @@
 import { createInterface } from "node:readline";
 import { explore } from "./explore.js";
+import { readDocs } from "./docs.js";
 import { watch } from "./watch.js";
-import { listSites, loadModel, siteName } from "./registry.js";
+import { listSites, loadModel, readOverrides, siteName } from "./registry.js";
 import { siteApi, type SiteApi, type SiteApiOptions } from "./runtime/site-api.js";
+import type { SiteAction } from "./runtime/actions.js";
+import type { ChannelOptions } from "./runtime/channels.js";
 import type { JsonSchema, Operation, PageEndpoint, Param, SiteModel } from "./types.js";
 
 // A stdio MCP server. With a site: one tool per operation and page endpoint, with typed inputs.
@@ -50,7 +53,7 @@ function toolName(id: string): string {
   return id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
 }
 
-function siteTools(model: SiteModel): Json[] {
+function siteTools(model: SiteModel, saved: Record<string, SiteAction> = {}): Json[] {
   const ops = model.operations.map((op) => ({
     name: toolName(op.id),
     description: `${op.summary ?? op.description ?? op.id}: ${op.method} ${op.path} on ${model.site} (${op.role}, ${op.bucket} confidence).`,
@@ -67,7 +70,35 @@ function siteTools(model: SiteModel): Json[] {
     },
     annotations: { readOnlyHint: true },
   }));
-  return [...ops, ...pages];
+  const actions = Object.entries(saved).map(([name, action]) => ({
+    name: toolName(name),
+    description: `${action.description ?? name}: runs ${action.steps.map((step) => step.operation).join(" → ")} on ${model.site}.`,
+    inputSchema: { type: "object", properties: {}, additionalProperties: true },
+  }));
+  return [...ops, ...pages, ...actions];
+}
+
+function listOperations(model: SiteModel, saved: Record<string, SiteAction>): Json {
+  return {
+    operations: siteTools(model, saved).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input: tool.inputSchema,
+    })),
+    channels: model.channels.map((channel) => ({
+      id: channel.id,
+      kind: channel.kind,
+      url: channel.url,
+    })),
+  };
+}
+
+function channelOptions(args: Json): ChannelOptions {
+  return {
+    ...(Array.isArray(args.send) ? { send: args.send as unknown[] } : {}),
+    ...(typeof args.seconds === "number" ? { seconds: args.seconds } : {}),
+    ...(typeof args.match === "string" ? { match: args.match } : {}),
+  };
 }
 
 const GENERAL_TOOLS: Json[] = [
@@ -113,6 +144,42 @@ const GENERAL_TOOLS: Json[] = [
     },
   },
   {
+    name: "run_action",
+    description:
+      "Run one of a site's saved multi-step actions (list_operations shows them): its operations run in order, each step's result feeding the next.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site: { type: "string" },
+        action: { type: "string" },
+        inputs: { type: "object" },
+      },
+      required: ["site", "action"],
+    },
+  },
+  {
+    name: "listen_channel",
+    description:
+      "Open one of a site's live channels (WebSocket or event stream, see list_operations) from its page, send messages, listen for a while and return what arrived.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site: { type: "string" },
+        channel: { type: "string" },
+        send: { type: "array", description: "Messages to send once connected (WebSocket)." },
+        seconds: { type: "number", description: "How long to listen (default 10, at most 120)." },
+        match: { type: "string", description: "Keep only messages containing this text." },
+      },
+      required: ["site", "channel"],
+    },
+  },
+  {
+    name: "site_docs",
+    description:
+      "A mapped site's published API documents (OpenAPI/Swagger) and GraphQL schemas, read from its page with the user's session: operations nobody has clicked yet. Saves them in the site's folder.",
+    inputSchema: { type: "object", properties: { site: { type: "string" } }, required: ["site"] },
+  },
+  {
     name: "explore_sites",
     description:
       "Map sites by name: an AI agent uses each one in the browser (search, filters, pages, details) while it is recorded, then builds its API. Needs a connected model.",
@@ -121,6 +188,11 @@ const GENERAL_TOOLS: Json[] = [
       properties: {
         sites: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
         goal: { type: "string", description: "Extra things to do on each site." },
+        actions: {
+          type: "boolean",
+          description:
+            "Also map actions (like, send, post, buy) in dry run: their requests are recorded and blocked, never sent.",
+        },
       },
       required: ["sites"],
     },
@@ -171,40 +243,55 @@ export async function runMcpServer(site?: string, options: SiteApiOptions = {}):
   };
   const model = site ? await loadModel(site) : undefined;
   if (site && !model) throw new Error(`${siteName(site)} is not mapped yet.`);
+  const saved = model ? ((await readOverrides(model.site)).actions ?? {}) : {};
   const siteTool = async (current: SiteModel, name: unknown, args: Json): Promise<unknown> => {
     const ids = [...current.operations.map((op) => op.id), ...current.pages.map((p) => p.id)];
     const id = ids.find((item) => toolName(item) === name);
+    const action = Object.keys(saved).find((item) => toolName(item) === name);
+    if (!id && action) return (await api(current.site)).action(action, args);
     if (!id) throw new Error(`Unknown tool ${String(name)}`);
     return callTool(await api(current.site), id, args);
   };
-  const generalTool = async (name: unknown, args: Json): Promise<unknown> => {
-    if (name === "list_sites") return listSites();
-    if (name === "list_operations") {
+  const general: Record<string, (args: Json) => Promise<unknown>> = {
+    list_sites: () => listSites(),
+    list_operations: async (args) => {
       const found = await loadModel(String(args.site));
       if (!found) throw new Error(`${String(args.site)} is not mapped`);
-      return siteTools(found).map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input: tool.inputSchema,
-      }));
-    }
-    if (name === "watch_operation") return watchTool(args);
-    if (name === "explore_sites")
-      return explore(args.sites as string[], {
+      return listOperations(found, (await readOverrides(found.site)).actions ?? {});
+    },
+    run_action: async (args) =>
+      (await api(String(args.site))).action(
+        String(args.action),
+        (args.inputs as Json | undefined) ?? {},
+      ),
+    listen_channel: async (args) =>
+      (await api(String(args.site))).channel(String(args.channel), channelOptions(args)),
+    watch_operation: watchTool,
+    site_docs: (args) => readDocs(String(args.site)),
+    explore_sites: (args) =>
+      explore(args.sites as string[], {
         ...(typeof args.goal === "string" ? { goal: args.goal } : {}),
+        ...(args.actions === true ? { actions: true } : {}),
+      }),
+    call_operation: async (args) => {
+      const maxItems = typeof args.maxItems === "number" ? { maxItems: args.maxItems } : {};
+      return callTool(await api(String(args.site)), String(args.operation), {
+        ...((args.params as Json | undefined) ?? {}),
+        ...maxItems,
       });
-    if (name !== "call_operation") throw new Error(`Unknown tool ${String(name)}`);
-    const maxItems = typeof args.maxItems === "number" ? { maxItems: args.maxItems } : {};
-    return callTool(await api(String(args.site)), String(args.operation), {
-      ...((args.params as Json | undefined) ?? {}),
-      ...maxItems,
-    });
+    },
+  };
+  const generalTool = (name: unknown, args: Json): Promise<unknown> => {
+    const run = general[String(name)];
+    if (!run) throw new Error(`Unknown tool ${String(name)}`);
+    return run(args);
   };
   const handle = async (message: Json): Promise<unknown> => {
     const params = (message.params ?? {}) as Json;
     if (message.method === "initialize") return initializeResult(params, model);
     if (message.method === "ping") return {};
-    if (message.method === "tools/list") return { tools: model ? siteTools(model) : GENERAL_TOOLS };
+    if (message.method === "tools/list")
+      return { tools: model ? siteTools(model, saved) : GENERAL_TOOLS };
     if (message.method !== "tools/call")
       throw new Error(`Unsupported method: ${String(message.method)}`);
     const args = (params.arguments ?? {}) as Json;

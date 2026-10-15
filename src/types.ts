@@ -242,4 +242,9 @@ export interface Overrides {
   signers?: Record<string, string>;
   /** Operations to drop entirely. */
   drop?: string[];
+  /** Multi-step actions: one named call that runs several operations in order (runtime/actions.ts). */
+  actions?: Record<
+    string,
+    { description?: string; steps: { operation: string; params?: Record<string, unknown> }[] }
+  >;
 }

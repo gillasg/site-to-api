@@ -30,28 +30,31 @@ for await (const product of shop.paginate.listProducts({ category: "audio" }))
 
 ## Map a site
 
-| Command                        | What it does                                                                                                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `record <url>`                 | Opens the site in a new tab and records everything while you use it. Press Enter when done.                                                                         |
-| `record <url> --attach <tab>`  | Records a tab you already have open (a tab id, or text from its title or URL).                                                                                      |
-| `record --passive a.com,b.com` | Records every tab on those domains, including ones opened later, until you press Enter.                                                                             |
-| `describe <site> "<flow>"`     | An AI agent performs the flow in your browser while it is recorded (needs a model; see below).                                                                      |
-| `explore <site> [site ...]`    | An AI agent uses each site (search, filters, pages, details) in a background tab while it is recorded, then builds it. Several at once; `--goal` adds things to do. |
-| `import <site> <files>`        | Adds HAR files (from any tool) or mitmproxy flow files. Captures merge; nothing is overwritten.                                                                     |
-| `build <site>`                 | Rebuilds the API from every flow. `--until filter\|normalize\|infer\|trace` stops early and writes each stage's output.                                             |
+| Command                        | What it does                                                                                                                                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `record <url>`                 | Opens the site in a new tab and records everything while you use it. Press Enter when done.                                                                                                                                                                                                |
+| `record <url> --attach <tab>`  | Records a tab you already have open (a tab id, or text from its title or URL).                                                                                                                                                                                                             |
+| `record --passive a.com,b.com` | Records every tab on those domains, including ones opened later, until you press Enter.                                                                                                                                                                                                    |
+| `describe <site> "<flow>"`     | An AI agent performs the flow in your browser while it is recorded (needs a model; see below).                                                                                                                                                                                             |
+| `explore <site> [site ...]`    | An AI agent uses each site (search, filters, pages, details) in a background tab while it is recorded, then builds it. Several at once; `--goal` adds things to do. `--actions` also maps actions (like, send, post, buy) in dry run: their requests are recorded and blocked, never sent. |
+| `import <site> <files>`        | Adds HAR files (from any tool) or mitmproxy flow files, so phone and desktop apps can be mapped too. Captures merge; nothing is overwritten.                                                                                                                                               |
+| `docs <site>`                  | Reads the site's published API documents (OpenAPI/Swagger) and GraphQL schemas with your session, and lists operations nobody clicked yet.                                                                                                                                                 |
+| `build <site>`                 | Rebuilds the API from every flow. `--until filter\|normalize\|infer\|trace` stops early and writes each stage's output.                                                                                                                                                                    |
 
 Each build writes a new version only when the API changed, and prints what changed.
 
 ## Use it
 
-| Command                   | What it does                                                                                                      |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ops <site>`              | Lists operations and their inputs.                                                                                |
-| `call <site> <op> [json]` | Calls an operation. `--param k=v`, `--all` to walk every page, `--transport page\|direct`.                        |
-| `serve`                   | A local REST API for every mapped site, with interactive docs. Calls need the printed token.                      |
-| `mcp [site]`              | A stdio MCP server: one tool per operation for a site, or tools to list and call any site.                        |
-| `session <site>`          | Exports your cookies and web storage for that site, so calls run from Node for 12 hours.                          |
-| `export <site>`           | Writes OpenAPI (JSON and YAML), AsyncAPI, the TypeScript client, Markdown and HTML reports, and redacted samples. |
+| Command                   | What it does                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `ops <site>`              | Lists operations and their inputs.                                                                                              |
+| `call <site> <op> [json]` | Calls an operation. `--param k=v`, `--all` to walk every page, `--transport page\|direct`.                                      |
+| `serve`                   | A local REST API for every mapped site, with interactive docs. Calls need the printed token.                                    |
+| `action <site> [name]`    | Lists or runs multi-step actions (one call that runs several operations, each fed by the last). `--steps a,b,c` saves one.      |
+| `channel <site> [id]`     | Lists live channels (WebSocket, event streams), or listens on one from the site's page: `--send json`, `--seconds n`.           |
+| `mcp [site]`              | A stdio MCP server: one tool per operation for a site, or tools to list and call any site.                                      |
+| `session <site>`          | Exports your cookies and web storage for that site, so calls run from Node. When it expires, it renews itself from the browser. |
+| `export <site>`           | Writes OpenAPI (JSON and YAML), AsyncAPI, the TypeScript client, Markdown and HTML reports, and redacted samples.               |
 
 ### From code
 
@@ -76,7 +79,9 @@ Apps that already drive a browser can plug it in: anything with `run(code, { ses
 { "mcpServers": { "shop": { "command": "npx", "args": ["site-to-api", "mcp", "shop.example"] } } }
 ```
 
-Leave out the site to get `list_sites`, `list_operations`, `call_operation`, `watch_operation` and `explore_sites` across every mapped site.
+Leave out the site to get `list_sites`, `list_operations`, `call_operation`, `watch_operation`, `run_action`, `listen_channel`, `site_docs` and `explore_sites` across every mapped site. With a site, saved actions are tools too.
+
+Failed calls say what went wrong: signed out (exit code 3), missing input (2), browser not connected (4), the API failed (5), anything else (1).
 
 ## What it understands
 
@@ -181,9 +186,21 @@ noise.json                noise learned across sites
       "fields": [{ "name": "price", "selector": ".price", "type": "number" }]
     }
   ],
-  "signers": { "getFeed": "async (request) => window.siteClient.get(request.url)" }
+  "signers": { "getFeed": "async (request) => window.siteClient.get(request.url)" },
+  "actions": {
+    "bookSlot": {
+      "description": "Book the first free slot on a date",
+      "steps": [
+        { "operation": "searchSlots", "params": { "date": "{{inputs.date}}" } },
+        { "operation": "holdSlot", "params": { "slotId": "{{steps.0.slots.0.id}}" } },
+        { "operation": "confirmBooking" }
+      ]
+    }
+  }
 }
 ```
+
+In an action's steps, `{{inputs.x}}`, `{{steps.N.path}}` and `{{last.path}}` fill values from the inputs and earlier results; any input a step still needs is looked up by name in earlier results.
 
 ## Privacy and safety
 

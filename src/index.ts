@@ -36,5 +36,17 @@ export { runMcpServer } from "./mcp.js";
 export { performFlow, editApi, nameOperations, connectModel, type ModelLike } from "./agent.js";
 export { explore, EXPLORE_BRIEF, type ExploreOptions, type ExploreResult } from "./explore.js";
 export { watch, type WatchOptions, type WatchResult } from "./watch.js";
+export { readDocs } from "./docs.js";
+export {
+  checkCaptures,
+  exportSite,
+  isSiteToolAction,
+  runSiteToolAction,
+  signingInfo,
+  SITE_TOOL_ACTIONS,
+  SITE_TOOL_HELP,
+  type SiteToolAction,
+  type SiteToolInput,
+} from "./tool.js";
 export { isSiteApiRequest, handleSiteApiRequest, type SiteApiRequest } from "./requests.js";
 export * from "./runtime/index.js";

@@ -87,6 +87,8 @@ export interface FlowOptions {
   session?: string;
   /** Bring the recorded tab to the front. Default true. */
   foreground?: boolean;
+  /** Requests that would change something are blocked and only recorded (see RecordOptions). */
+  dryRun?: boolean;
 }
 
 const FLOW_TOOLS = [
@@ -164,6 +166,7 @@ export async function performFlow(
     ...(options.bridge ? { bridge: options.bridge } : {}),
     ...(options.session ? { session: options.session } : {}),
     ...(options.foreground === false ? { foreground: false } : {}),
+    ...(options.dryRun ? { dryRun: true } : {}),
   });
   const agent = new FlowAgent(session, options.onStep);
   const messages: Message[] = [
@@ -202,7 +205,8 @@ const OVERRIDES_HELP = `Overrides (JSON) fields:
 - noise / include / exclude: URL regexes   - origins: allowed origins
 - redact: { headers, keys, patterns }
 - pages: [{ id, url: "https://site/path/{slug}", baseSelector?, fields: [{ name, selector, type?: text|html|attr|number|list, attr? }] }]
-- signers: { operationId: "async (request) => ({ status, json })" } (runs in the page)`;
+- signers: { operationId: "async (request) => ({ status, json })" } (runs in the page)
+- actions: { name: { description, steps: [{ operation: id, params?: { field: "{{inputs.x}}" | "{{steps.0.items.0.id}}" | "{{last.id}}" | value } }] } } (one call that runs several operations in order; inputs a step needs are also found by name in earlier results)`;
 
 /** A recorded page's HTML, for writing CSS extractors: the exact URL, else the same path. */
 async function recordedHtml(site: string, url: string): Promise<string | undefined> {

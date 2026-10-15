@@ -14,6 +14,10 @@ export const EXPLORE_BRIEF = `Use this site's main features so that its API show
 - open the main sections or categories from its navigation.
 Look around, do not change anything: never buy, book, post, send, follow, like, delete or change settings. Close pop-ups and cookie banners. Stop once these have been done.`;
 
+/** With actions: true, writes are blocked in the browser, so the agent may press action buttons. */
+export const EXPLORE_ACTIONS_BRIEF = `Use this site's main features so that its API shows up in the recording: search, open the next page of results, apply a filter, open an item's details, open the main sections.
+This tab is in dry run: any request that would change something is blocked before it reaches the site and only recorded. So also use each of the site's main actions once (for example like, follow, save, add to cart, comment, send a message, post), filling forms with harmless test values. The page may act as if it worked; nothing was sent. Do not enter payment card details or passwords. Close pop-ups and cookie banners. Stop once these have been done.`;
+
 export interface ExploreOptions {
   /** Extra things to do, for example "check delivery dates" or "open the cart". */
   goal?: string;
@@ -26,6 +30,8 @@ export interface ExploreOptions {
   /** Bring tabs to the front (default false: background tabs). */
   foreground?: boolean;
   onSite?: (result: ExploreResult) => void;
+  /** Also map the site's actions (like, send, post, add to cart) in dry run: blocked, recorded only. */
+  actions?: boolean;
 }
 
 export interface ExploreResult {
@@ -35,6 +41,9 @@ export interface ExploreResult {
   version?: number;
   error?: string;
 }
+
+const brief = (options: ExploreOptions) =>
+  options.actions ? EXPLORE_ACTIONS_BRIEF : EXPLORE_BRIEF;
 
 async function exploreOne(
   site: string,
@@ -47,13 +56,14 @@ async function exploreOne(
   try {
     const flow = await performFlow(
       name,
-      options.goal ? `${EXPLORE_BRIEF}\nAlso: ${options.goal}` : EXPLORE_BRIEF,
+      options.goal ? `${brief(options)}\nAlso: ${options.goal}` : brief(options),
       {
         model,
         maxSteps: options.maxSteps ?? 25,
         session: `site-to-api-explore-${name}`,
         ...(startUrl ? { startUrl } : {}),
         foreground: options.foreground === true,
+        ...(options.actions ? { dryRun: true } : {}),
         ...(options.bridge ? { bridge: options.bridge } : {}),
       },
     );
