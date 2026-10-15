@@ -47,10 +47,10 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.mjs\" \"scripts/**/*.mjs\" \"*.{json,yaml,mjs}\" \".github/**/*.yml\"",
     "test": "node --test --test-timeout=120000 test/*.test.mjs",
     "check": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm build && pnpm test",
-    "pack:vendor": "node scripts/pack-vendor.mjs"
+    "links": "node scripts/link-repos.mjs"
   },
   "dependencies": {
-    "pi-ai-login": "file:vendor/pi-ai-login-0.1.1.tgz"
+    "pi-ai-login": "link:../pi-ai-login"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

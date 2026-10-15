@@ -193,9 +193,12 @@ noise.json                noise learned across sites
 ## Development
 
 ```bash
+node scripts/link-repos.mjs   # clones and builds the repos it links to, next to this one
 pnpm install
-pnpm check          # format, types, lint, build, tests
+pnpm check                    # format, types, lint, build, tests
 ```
+
+Shared code comes from sibling folders through live links (`link:../pi-ai-login`), so a change there is used here on the next build, with nothing copied or committed. `node scripts/link-repos.mjs --revisions` prints the revision of each linked repo.
 
 The end-to-end test records and calls a local test site in a private, headless Chrome for Testing with the Browser Use Extension. It runs when it finds the extension (`BUE_DIR`, default `../browser-use-extension`) and Chrome (`CHROME_PATH`), and always in CI.
 

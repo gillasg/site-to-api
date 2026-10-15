@@ -16,11 +16,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # The end-to-end test drives real Chrome through the Browser Use Extension.
-      - uses: actions/checkout@v4
-        with:
-          repository: gillasg/browser-use-extension
-          path: .bue
       - uses: pnpm/action-setup@v4
         with:
           version: 11.4.0
@@ -28,10 +23,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            .bue/pnpm-lock.yaml
       # Chrome for Testing: branded Chrome ignores --load-extension.
       - name: Install Chrome for Testing
         id: chrome
@@ -39,12 +30,10 @@ jobs:
         run: |
           line=$(npx -y @puppeteer/browsers@2.10.5 install chrome@stable --path "$RUNNER_TEMP/cft" | tail -1)
           echo "chrome-path=${line#* }" >> "$GITHUB_OUTPUT"
-      - name: Build the Browser Use Extension
-        working-directory: .bue
-        run: |
-          pnpm install --frozen-lockfile --ignore-scripts
-          pnpm build
-      - run: pnpm install --frozen-lockfile
+      # The linked repos go next to this one; the end-to-end test also needs the Browser Use
+      # Extension, built against this checkout.
+      - name: Set up linked repos
+        run: node scripts/link-repos.mjs --also browser-use-extension
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm lint
@@ -52,5 +41,4 @@ jobs:
       - run: pnpm test
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-          BUE_DIR: .bue
           REQUIRE_E2E: "1"
