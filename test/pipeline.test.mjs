@@ -271,3 +271,55 @@ test("mitmproxy flow files load like HAR", () => {
   assert.equal(JSON.parse(exchanges[0].responseBody).id, 1);
   assert.equal(filterExchanges(exchanges).kept.length, 2);
 });
+
+test("pages with JSON-LD in CDATA comments become one slug page endpoint", async () => {
+  const film = (slug, name) => ({
+    startedDateTime: "2026-10-01T10:00:00.000Z",
+    time: 50,
+    _resourceType: "document",
+    request: {
+      method: "GET",
+      url: `https://films.example/film/${slug}/`,
+      httpVersion: "HTTP/1.1",
+      headers: [{ name: "accept", value: "text/html" }],
+      queryString: [],
+      cookies: [],
+      headersSize: -1,
+      bodySize: 0,
+    },
+    response: {
+      status: 200,
+      statusText: "OK",
+      httpVersion: "HTTP/1.1",
+      headers: [{ name: "content-type", value: "text/html; charset=utf-8" }],
+      cookies: [],
+      content: {
+        size: 200,
+        mimeType: "text/html",
+        text: `<html><head><script type="application/ld+json">
+/* <![CDATA[ */
+{"@context":"http://schema.org","@type":"Movie","name":"${name}","aggregateRating":{"@type":"AggregateRating","ratingValue":4.2}}
+/* ]]> */
+</script></head><body><h1>${name}</h1></body></html>`,
+      },
+      redirectURL: "",
+      headersSize: -1,
+      bodySize: 200,
+    },
+    cache: {},
+    timings: { send: 0, wait: 50, receive: 0 },
+  });
+  const har = {
+    log: {
+      version: "1.2",
+      creator: { name: "test", version: "1" },
+      entries: [film("dune-part-two", "Dune: Part Two"), film("barbie", "Barbie")],
+    },
+  };
+  const exchanges = parseCapture(JSON.stringify(har), "films");
+  const { model } = await buildSiteModel(exchanges, { site: "films.example" });
+  const page = model.pages.find((p) => p.path === "/film/{filmSlug}/");
+  assert.ok(page, JSON.stringify(model.pages.map((p) => p.path)));
+  assert.deepEqual(page.embedded, ["jsonld"]);
+  assert.equal(page.sampleCount, 2);
+});

@@ -1,3 +1,4 @@
+import { documentShape } from "./html.js";
 import type { Classified } from "../filter.js";
 import type { Exchange, Operation, Param } from "../types.js";
 import {
@@ -79,7 +80,13 @@ export function groupExchanges(kept: Classified[], templates: string[] = []): Gr
     (item) => item.category === "api" || item.category === "auth" || item.category === "document",
   );
   const templated = templatePaths(
-    api.map(({ exchange }) => ({ url: exchange.url, shape: shapeKey(responseJson(exchange)) })),
+    api.map(({ exchange, category }) => ({
+      url: exchange.url,
+      shape:
+        category === "document"
+          ? documentShape(exchange.responseBody ?? "")
+          : shapeKey(responseJson(exchange)),
+    })),
     templates,
   );
   const groups = new Map<string, Group>();

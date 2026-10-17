@@ -192,7 +192,14 @@ function findSlugPositions(
     const list = [...values];
     const slugs = list.filter((value) => SLUG.test(value)).length;
     const sameShape = shapes.size === 1 && !shapes.has("");
-    if ((list.length >= 3 && slugs / list.length >= 0.6) || (list.length >= 5 && sameShape))
+    // Pages carrying the same kind of embedded data (a film page, a product page) are one
+    // template from the second example on, whatever their slugs look like.
+    const samePage = sameShape && [...shapes][0]?.startsWith("html:") === true;
+    if (
+      (list.length >= 3 && slugs / list.length >= 0.6) ||
+      (list.length >= 5 && sameShape) ||
+      (list.length >= 2 && samePage)
+    )
       positions.add(key);
   }
   return positions;

@@ -37,6 +37,43 @@ function tryJson(text: string): unknown {
   }
 }
 
+/** Script JSON without the CDATA and comment wrappers pages put around it. */
+function scriptJson(body: string): string {
+  return body
+    .trim()
+    .replace(/^(?:\/\*\s*)?<!\[CDATA\[(?:\s*\*\/)?/, "")
+    .replace(/(?:\/\*\s*)?\]\]>(?:\s*\*\/)?$/, "")
+    .replace(/^<!--/, "")
+    .replace(/-->$/, "")
+    .trim();
+}
+
+const GENERIC_TYPES = new Set([
+  "WebSite",
+  "WebPage",
+  "Organization",
+  "BreadcrumbList",
+  "SiteNavigationElement",
+  "SearchAction",
+]);
+
+/** What kind of page a document is, from its embedded data: "html:jsonld:Movie" and the like.
+ * Pages of one kind at sibling paths (/film/dune/, /film/barbie/) share a template. */
+export function documentShape(html: string): string {
+  const embedded = extractEmbedded(html);
+  const kinds = embeddedKinds(embedded);
+  if (!kinds.length) return "";
+  const types = (embedded.jsonLd ?? [])
+    .map((item) =>
+      item && typeof item === "object" ? (item as { "@type"?: unknown })["@type"] : "",
+    )
+    .map((type) => (Array.isArray(type) ? type.join("+") : String(type ?? "")))
+    .filter((type) => type && !GENERIC_TYPES.has(type));
+  // Site-wide JSON-LD alone (WebSite, Organization) says nothing about what the page is.
+  if (kinds.length === 1 && kinds[0] === "jsonld" && !types.length) return "";
+  return `html:${kinds.join(",")}:${[...new Set(types)].sort().join(",")}`;
+}
+
 /** The object literal starting at `start` (a `{`), respecting strings: `{...}` up to its match. */
 export function balancedObject(text: string, start: number): string | undefined {
   let depth = 0;
@@ -86,8 +123,10 @@ function scriptData(embedded: Embedded, attributes: string, body: string): void 
   const type = attr(attributes, "type")?.toLowerCase();
   if (id === "__NEXT_DATA__") embedded.next = tryJson(body);
   else if (id === "__NUXT_DATA__") embedded.nuxt = tryJson(body);
-  else if (type === "application/ld+json") embedded.jsonLd = pushJson(embedded.jsonLd, body, false);
-  else if (type === "application/json") embedded.json = pushJson(embedded.json, body, true);
+  else if (type === "application/ld+json")
+    embedded.jsonLd = pushJson(embedded.jsonLd, scriptJson(body), false);
+  else if (type === "application/json")
+    embedded.json = pushJson(embedded.json, scriptJson(body), true);
   else
     for (const [key, pattern] of ASSIGNMENTS) {
       const value = assignment(body, pattern);

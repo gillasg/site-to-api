@@ -191,12 +191,31 @@ export async function performFlow(
 }
 
 function modelSummary(model: SiteModel): string {
-  return model.operations
-    .map(
+  const params = (list: { in: string; name: string }[]) =>
+    list.map((p) => `${p.in}:${p.name}`).join(", ");
+  return [
+    ...model.operations.map(
       (op) =>
-        `${op.id}: ${op.method} ${op.origin}${op.path} params=[${op.params.map((p) => `${p.in}:${p.name}`).join(", ")}] samples=${op.sampleCount}`,
-    )
-    .join("\n");
+        `${op.id}: ${op.method} ${op.origin}${op.path} params=[${params(op.params)}] samples=${op.sampleCount}`,
+    ),
+    ...model.pages.map(
+      (page) =>
+        `${page.id}: PAGE ${page.origin}${page.path} params=[${params(page.params)}] data=[${page.embedded.join(", ") || "css fields"}]`,
+    ),
+  ].join("\n");
+}
+
+/** Recorded HTML pages, so an edit can add page endpoints for them. */
+async function recordedPages(site: string): Promise<string> {
+  const { exchanges } = await loadFlows(site);
+  const urls = exchanges
+    .filter((e) => /html/i.test(e.responseMime ?? "") && e.responseBody)
+    .map((e) => e.url);
+  return [...new Set(urls)].slice(0, 40).join("\n");
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
 }
 
 const OVERRIDES_HELP = `Overrides (JSON) fields:
@@ -221,6 +240,47 @@ async function recordedHtml(site: string, url: string): Promise<string | undefin
   };
   return (pages.find((e) => e.url === url) ?? pages.find((e) => path(e.url) === path(url)))
     ?.responseBody;
+}
+
+async function editPrompt(
+  name: string,
+  built: SiteModel,
+  current: Overrides,
+  instruction: string,
+): Promise<string> {
+  const operations = modelSummary(built) || "(none yet)";
+  const pages = (await recordedPages(name)) || "(none)";
+  return `${OVERRIDES_HELP}
+
+Operations and page endpoints:
+${operations}
+
+Recorded pages:
+${pages}
+
+Current overrides:
+${JSON.stringify(current, null, 2)}
+
+Change requested: ${instruction}`;
+}
+
+/** Writes the overrides an edit chose and rebuilds; says when nothing actually changed. */
+async function applyEdit(
+  name: string,
+  set: ToolCall,
+  current: Overrides,
+  built: SiteModel,
+): Promise<{ overrides: Overrides; note: string }> {
+  const overrides = set.arguments.overrides as Overrides;
+  const note = String(set.arguments.note ?? "");
+  if (sameJson(overrides, current))
+    throw new Error(`The edit changed nothing${note ? `: ${note}` : "."}`);
+  await writeOverrides(name, overrides);
+  const { model: after } = await rebuild(name);
+  if (after && modelSummary(after) !== modelSummary(built)) return { overrides, note };
+  const warning =
+    "the overrides changed, but the operations and pages did not; check the templates or selectors";
+  return { overrides, note: note ? `${note} (${warning})` : warning };
 }
 
 /** Applies a plain-English change to a site's API by editing its overrides, then rebuilds. */
@@ -250,7 +310,7 @@ export async function editApi(
   const messages: Message[] = [
     {
       role: "user",
-      content: `${OVERRIDES_HELP}\n\nOperations:\n${modelSummary(built)}\n\nCurrent overrides:\n${JSON.stringify(current, null, 2)}\n\nChange requested: ${instruction}`,
+      content: await editPrompt(name, built, current, instruction),
       timestamp: Date.now(),
     },
   ];
@@ -264,12 +324,7 @@ export async function editApi(
     messages.push(reply as Message);
     const calls = reply.content.filter((part): part is ToolCall => part.type === "toolCall");
     const set = calls.find((call) => call.name === "set_overrides");
-    if (set) {
-      const overrides = set.arguments.overrides as Overrides;
-      await writeOverrides(name, overrides);
-      await rebuild(name);
-      return { overrides, note: String(set.arguments.note ?? "") };
-    }
+    if (set) return applyEdit(name, set, current, built);
     if (!calls.length) throw new Error(text(reply.content) || "The model made no change.");
     const pageHtml = options.pageHtml ?? ((url: string) => recordedHtml(name, url));
     for (const call of calls) {
